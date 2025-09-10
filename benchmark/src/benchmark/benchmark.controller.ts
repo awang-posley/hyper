@@ -52,4 +52,38 @@ export class BenchmarkController {
   getDefaultConfig(): BenchmarkConfig {
     return this.benchService.createDefaultConfig();
   }
+
+  @Post('post-only-cancel')
+  async runPostOnlyWithCancelBenchmark(
+    @Query('transportType') transportType: TransportType = TransportType.HTTP,
+    @Query('numberOfOrders') numberOfOrders: number = 5,
+    @Query('delayCancelAfterPlacement')
+    delayCancelAfterPlacement: number = 2000,
+  ): Promise<BenchmarkResult> {
+    return this.benchService.runPostOnlyWithCancelBenchmark(
+      transportType,
+      numberOfOrders,
+      delayCancelAfterPlacement,
+    );
+  }
+
+  @Post('compare-market-vs-cancel')
+  async compareMarketVsCancel(
+    @Query('transportType') transportType: TransportType = TransportType.HTTP,
+    @Query('numberOfOrders') numberOfOrders: number = 5,
+  ): Promise<{
+    market: BenchmarkResult;
+    postOnlyWithCancel: BenchmarkResult;
+    analysis: {
+      avgMarketFillLatency: number;
+      avgCancelLatency: number;
+      latencyDifference: number;
+      speedupFactor: number;
+    };
+  }> {
+    return this.benchService.compareMarketVsCancel(
+      transportType,
+      numberOfOrders,
+    );
+  }
 }

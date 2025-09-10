@@ -14,6 +14,7 @@
 #   websocket       - Market orders via WebSocket
 #   limit           - Limit orders test
 #   post-only       - Post-only orders test
+#   post-only-cancel - Post-only orders + cancel latency test
 #   compare         - HTTP vs WebSocket comparison
 #   stress          - High-frequency stress test
 #   custom          - Use environment variables or CLI args
@@ -69,7 +70,7 @@ NC='\033[0m' # No Color
 
 # Default values
 DEFAULT_SYMBOL="ETH"
-DEFAULT_COUNT=5
+DEFAULT_COUNT=10
 DEFAULT_SIZE="0.01"
 DEFAULT_DELAY=1000
 DEFAULT_TIMEOUT=30000
@@ -98,6 +99,7 @@ show_help() {
     echo "  websocket       Market orders via WebSocket"
     echo "  limit           Limit orders test"
     echo "  post-only       Post-only orders test"
+    echo "  post-only-cancel Post-only orders + cancel latency test"
     echo "  compare         HTTP vs WebSocket comparison"
     echo "  stress          High-frequency stress test"
     echo "  custom          Use custom parameters"
@@ -179,7 +181,7 @@ while [[ $# -gt 0 ]]; do
             EXIT_AFTER="false"
             shift
             ;;
-        quick|market|websocket|limit|post-only|compare|stress|custom)
+        quick|market|websocket|limit|post-only|post-only-cancel|compare|stress|custom)
             BENCHMARK_TYPE="$1"
             shift
             ;;
@@ -257,10 +259,24 @@ case $BENCHMARK_TYPE in
         export BENCHMARK_ORDER_TYPE="post_only"
         export BENCHMARK_TRANSPORT=${TRANSPORT:-"http"}
         export BENCHMARK_SYMBOL=${SYMBOL:-$DEFAULT_SYMBOL}
-        export BENCHMARK_ORDER_COUNT=${COUNT:-5}
+        export BENCHMARK_ORDER_COUNT=${COUNT:-$DEFAULT_COUNT}
         export BENCHMARK_ORDER_SIZE=${SIZE:-$DEFAULT_SIZE}
         export BENCHMARK_DELAY=${DELAY:-1500}
         export BENCHMARK_TIMEOUT=${TIMEOUT:-30000}
+        ;;
+    post-only-cancel)
+        header "Post-Only Orders + Cancel Latency Benchmark"
+        log "This test places post-only orders and cancels them to measure cancel latency"
+        log "Validates hypothesis: cancel orders execute faster than market orders"
+        export BENCHMARK_ORDER_TYPE="post_only"
+        export BENCHMARK_TRANSPORT=${TRANSPORT:-"http"}
+        export BENCHMARK_SYMBOL=${SYMBOL:-$DEFAULT_SYMBOL}
+        export BENCHMARK_ORDER_COUNT=${COUNT:-5}
+        export BENCHMARK_ORDER_SIZE=${SIZE:-$DEFAULT_SIZE}
+        export BENCHMARK_DELAY=${DELAY:-4000}  # Longer delay for cancel operations
+        export BENCHMARK_TIMEOUT=${TIMEOUT:-30000}
+        export BENCHMARK_TEST_CANCEL_LATENCY="true"
+        export BENCHMARK_CANCEL_DELAY=${OFFSET:-2000}  # Reuse offset for cancel delay
         ;;
     compare)
         header "Transport Comparison Benchmark"

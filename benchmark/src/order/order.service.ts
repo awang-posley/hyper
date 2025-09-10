@@ -10,6 +10,8 @@ import {
   TransportType,
   OrderPlacementResult,
   OrderFillResult,
+  OrderCancelResult,
+  OrderCancelPlacementResult,
   MarketPrice,
 } from '../common/interfaces/benchmark.interface';
 
@@ -28,6 +30,7 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
 
   private readonly authority: string;
   private userFillsSubscription: hl.Subscription;
+  private userEventsSubscription: hl.Subscription;
 
   // Order tracking
   private pendingOrders = new Map<
@@ -36,6 +39,16 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
       orderId: string;
       startTime: number;
       callback: (result: OrderFillResult) => void;
+    }
+  >();
+
+  // Cancel tracking
+  private pendingCancels = new Map<
+    string,
+    {
+      orderId: string;
+      startTime: number;
+      callback: (result: OrderCancelResult) => void;
     }
   >();
 
@@ -84,6 +97,9 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
       if (this.userFillsSubscription) {
         await this.userFillsSubscription.unsubscribe();
       }
+      if (this.userEventsSubscription) {
+        await this.userEventsSubscription.unsubscribe();
+      }
     } catch (error) {
       this.logger.error('Error during cleanup:', error);
     }
@@ -116,6 +132,40 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
           });
         },
       );
+
+      // TODO: Subscribe to user events for order updates (including cancellations)
+      // For now, we'll rely on timing the API response latency for cancels
+      // The WebSocket subscription for cancel notifications will be implemented
+      // once we determine the correct types from the Hyperliquid SDK
+      /*
+      this.userEventsSubscription = await this.subscriptionClient.userEvents(
+        { user: this.authority as `0x${string}` },
+        (data: any) => {
+          const notificationTime = Date.now();
+
+          if (data.events) {
+            data.events.forEach((event: any) => {
+              // Handle order cancellation events
+              if (event.canceled) {
+                const orderId = event.canceled.oid.toString();
+                const pendingCancel = this.pendingCancels.get(orderId);
+
+                if (pendingCancel) {
+                  const cancelResult: OrderCancelResult = {
+                    orderId,
+                    cancelTime: event.canceled.time || Date.now(),
+                    notificationTime,
+                  };
+
+                  pendingCancel.callback(cancelResult);
+                  this.pendingCancels.delete(orderId);
+                }
+              }
+            });
+          }
+        },
+      );
+      */
 
       this.logger.log('WebSocket subscriptions initialized successfully');
     } catch (error) {
@@ -171,6 +221,27 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
     else if (symbol === 'SOL') decimals = 2;
 
     return decimals;
+  }
+
+  /**
+   * Check if an error should be retried or is a permanent failure
+   */
+  private shouldRetryError(error: Error): boolean {
+    if (!error?.message) return true;
+
+    const message = String(error.message).toLowerCase();
+
+    // Don't retry on these permanent errors
+    const permanentErrors = [
+      'insufficient balance',
+      'order must have minimum value',
+      'invalid asset',
+      'asset not found',
+      'unauthorized',
+      'forbidden',
+    ];
+
+    return !permanentErrors.some((permError) => message.includes(permError));
   }
 
   async placeMarketOrder(
@@ -425,13 +496,21 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async cancelOrder(symbol: string, orderId: string): Promise<boolean> {
+  async cancelOrder(
+    symbol: string,
+    orderId: string,
+    cancelCallback?: (result: OrderCancelResult) => void,
+  ): Promise<OrderCancelPlacementResult> {
     try {
       const assetIndex = await this.getAssetIndex(symbol);
+
+      const cancelSentTime = Date.now();
 
       const result = await this.httpExchangeClient.cancel({
         cancels: [{ a: assetIndex, o: parseInt(orderId) }],
       });
+
+      const cancelReturnedTime = Date.now();
 
       const success =
         result.response.type === 'cancel' &&
@@ -439,22 +518,59 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
 
       if (success) {
         this.pendingOrders.delete(orderId);
+
+        // If callback provided, call it immediately with API response timing
+        // In the future, this could be enhanced with WebSocket notification timing
+        if (cancelCallback) {
+          const cancelResult: OrderCancelResult = {
+            orderId,
+            cancelTime: cancelReturnedTime, // Use API response time as cancel time
+            notificationTime: cancelReturnedTime, // Same as cancel time for now
+          };
+
+          // Call the callback immediately
+          setTimeout(() => cancelCallback(cancelResult), 0);
+        }
       }
 
-      return success;
+      return {
+        orderId,
+        success,
+        cancelSentTime,
+        cancelReturnedTime,
+        errorMessage: success ? undefined : 'Order cancellation failed',
+      };
     } catch (error) {
+      const cancelReturnedTime = Date.now();
       this.logger.error(`Failed to cancel order ${orderId}:`, error);
-      return false;
+
+      return {
+        orderId,
+        success: false,
+        cancelSentTime: Date.now(),
+        cancelReturnedTime,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      };
     }
   }
 
-  // Utility method to clean up expired pending orders
+  // Utility method to clean up expired pending orders and cancels
   cleanupExpiredOrders(timeoutMs: number = 30000) {
     const now = Date.now();
+
+    // Clean up expired pending orders
     for (const [orderId, order] of this.pendingOrders.entries()) {
       if (now - order.startTime > timeoutMs) {
         this.pendingOrders.delete(orderId);
         this.logger.warn(`Cleaned up expired pending order: ${orderId}`);
+      }
+    }
+
+    // Clean up expired pending cancels
+    for (const [orderId, cancel] of this.pendingCancels.entries()) {
+      if (now - cancel.startTime > timeoutMs) {
+        this.pendingCancels.delete(orderId);
+        this.logger.warn(`Cleaned up expired pending cancel: ${orderId}`);
       }
     }
   }

@@ -1,98 +1,196 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Hyperliquid Node Trade Monitor
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+A high-performance NestJS application that monitors trades from a local Hyperliquid non-validator node in real-time, providing ultra-low latency detection of trade executions.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Overview
 
-## Description
+This application connects directly to the trade log files written by your local Hyperliquid node, using efficient file system monitoring to detect new trades as soon as they're written to disk. This approach bypasses the public API and WebSocket delays, providing the fastest possible trade detection.
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Features
 
-## Project setup
+- **Real-time Trade Monitoring**: Uses chokidar for efficient file system monitoring
+- **Low Latency Detection**: Directly reads from node's trade log files
+- **Address Filtering**: Monitor specific Hyperliquid addresses
+- **Latency Statistics**: Tracks and reports detection latency metrics
+- **REST API**: Provides endpoints to query recent trades and statistics
+- **Automatic Log Rotation**: Handles hourly log file rotations seamlessly
 
+## Prerequisites
+
+- Node.js v18+ and npm
+- Running Hyperliquid non-validator node with `--write-trades` flag
+- Access to the node's data directory (default: `~/hl/data/node_trades/hourly`)
+
+## Installation
+
+1. Clone the repository and navigate to the node directory:
 ```bash
-$ npm install
+cd /home/awang/tmp/hyper/node
 ```
 
-## Compile and run the project
-
+2. Install dependencies:
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm install
 ```
 
-## Run tests
-
+3. Create a `.env` file based on the example:
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+cp env.example .env
 ```
 
-## Deployment
+4. Configure the `.env` file with your settings:
+```env
+# Hyperliquid addresses to monitor (comma-separated)
+MONITOR_ADDRESSES=0x1234567890abcdef...,0xabcdef1234567890...
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+# Path to the node data directory
+NODE_DATA_PATH=/home/awang/hl/data/node_trades/hourly
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+# Interval for logging statistics (in milliseconds)
+STATS_INTERVAL_MS=300000
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+# Maximum number of trade records to keep in memory
+MAX_RECORDS_TO_KEEP=1000
+
+# Port for the NestJS application
+PORT=3002
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+## Running the Application
 
-## Resources
+### Development Mode
+```bash
+npm run start:dev
+```
 
-Check out a few resources that may come in handy when working with NestJS:
+### Production Mode
+```bash
+npm run build
+npm run start:prod
+```
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+## API Endpoints
 
-## Support
+### GET /
+Returns a simple health check message.
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+### GET /trades/recent?limit=10
+Returns the most recent trades for monitored addresses.
 
-## Stay in touch
+**Response:**
+```json
+{
+  "trades": [
+    {
+      "trade": {
+        "coin": "ETH",
+        "side": "B",
+        "time": "2025-09-10T05:59:59.941651384",
+        "px": "4428.1",
+        "sz": "0.01",
+        "hash": "0x...",
+        "trade_dir_override": "Na",
+        "side_info": [...]
+      },
+      "detectedAt": 1694325599950,
+      "tradeTimestamp": 1694325599941,
+      "detectionLatency": 9
+    }
+  ],
+  "totalCount": 156
+}
+```
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+### GET /trades/stats
+Returns latency statistics for all recorded trades.
+
+**Response:**
+```json
+{
+  "latencyStats": {
+    "min": 5,
+    "max": 25,
+    "avg": 12.5,
+    "p50": 11,
+    "p95": 20,
+    "p99": 24,
+    "count": 156
+  },
+  "totalTrades": 156
+}
+```
+
+## How It Works
+
+1. **Current Hour Monitoring**: The application monitors only the current hour's trade file (e.g., `20250910/16` for hour 16), avoiding historical data processing.
+
+2. **Automatic Hour Rotation**: Every minute, it checks if the hour has changed and automatically switches to monitoring the new hour's file.
+
+3. **Efficient Reading**: When new data is detected, it reads only the new content using streams and tracks file positions to avoid re-reading.
+
+4. **Trade Parsing**: Each line in the trade files is parsed as JSON and checked against the monitored addresses. Old trades (>1 hour) are automatically filtered out.
+
+5. **Latency Calculation**: For matching trades, it calculates the detection latency as `current_time - trade_time`.
+
+6. **Statistics**: Every 5 minutes (configurable), it logs comprehensive statistics about detection performance.
+
+## Performance Considerations
+
+- **Memory Efficient**: Uses streams for file reading and maintains a limited buffer of trade records
+- **CPU Efficient**: Only processes new data and filters trades early
+- **Low Latency**: Direct file system monitoring provides the fastest possible detection
+
+## Monitoring Output
+
+The application logs detailed statistics every 5 minutes:
+
+```
+================================================================================
+TRADE MONITORING STATISTICS
+================================================================================
+Total trades recorded: 156
+
+LATENCY STATISTICS (Detection time - Trade time):
+  Min: 5ms
+  Max: 25ms
+  Average: 12.50ms
+  P50: 11ms
+  P95: 20ms
+  P99: 24ms
+
+LAST 10 TRADES:
+  1. 2025-09-10T05:59:59.941Z - ETH BUY 0.01 @ 4428.1 (user: 0x1234abcd..., latency: 9ms)
+  2. 2025-09-10T06:01:23.456Z - BTC SELL 0.001 @ 98765.4 (user: 0x1234abcd..., latency: 11ms)
+  ...
+================================================================================
+```
+
+## Troubleshooting
+
+1. **No trades detected**: 
+   - Verify the NODE_DATA_PATH is correct
+   - Ensure your node is running with `--write-trades` flag
+   - Check that MONITOR_ADDRESSES contains valid addresses
+
+2. **High latencies**:
+   - Check system load and disk I/O
+   - Ensure the application is running on the same machine as the node
+   - Consider reducing STATS_INTERVAL_MS if needed
+
+3. **Missing trades**:
+   - Verify the monitored addresses are correct
+   - Check application logs for parsing errors
+   - Ensure file permissions allow reading the trade files
+
+## Architecture
+
+The application follows a modular NestJS architecture:
+
+- **MonitorService**: Core service handling file monitoring and trade processing
+- **AppController**: REST API endpoints
+- **ConfigModule**: Environment configuration management
+- **ScheduleModule**: Periodic statistics reporting
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+This project is private and proprietary.

@@ -1,0 +1,25 @@
+[Unit]
+Description=Hyperliquid Node Trade Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=awang
+WorkingDirectory=/home/awang/tmp/hyper/node
+Environment="NODE_ENV=production"
+EnvironmentFile=/home/awang/tmp/hyper/node/.env
+ExecStart=/usr/bin/node dist/main
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hyperliquid-monitor
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

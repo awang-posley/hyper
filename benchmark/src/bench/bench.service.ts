@@ -25,7 +25,8 @@ export class BenchService implements OnApplicationBootstrap {
 
   onApplicationBootstrap() {
     // Check for auto-run configuration
-    const autoRun = this.configService.get<string>('BENCHMARK_AUTO_RUN');
+    // const autoRun = this.configService.get<string>('BENCHMARK_AUTO_RUN');
+    /*
     if (autoRun === 'true') {
       this.logger.log('Auto-run benchmark detected, starting benchmark...');
 
@@ -36,6 +37,7 @@ export class BenchService implements OnApplicationBootstrap {
         });
       }, 1000);
     }
+    */
   }
 
   private async runAutoConfiguredBenchmark(): Promise<void> {

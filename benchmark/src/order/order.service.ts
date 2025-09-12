@@ -14,6 +14,110 @@ import {
   OrderCancelPlacementResult,
   MarketPrice,
 } from '../common/interfaces/benchmark.interface';
+import WebSocket from 'ws';
+
+interface Order {
+  coin: string;
+  side: 'B' | 'A';
+  limitPx: string;
+  sz: string; // Remaining size
+  oid: number;
+  timestamp: number;
+  // Additional fields can be added as needed, e.g., reduceOnly: boolean, orderType: string, etc.
+}
+
+interface RawBookDiff {
+  new?: { sz: string };
+  update?: { origSz: string; newSz: string };
+  remove?: true;
+}
+
+interface L4SnapshotMessage {
+  Snapshot: {
+    coin: string;
+    time: number;
+    height: number;
+    levels: Array<
+      Array<{
+        user: string;
+        coin: string;
+        side: 'B' | 'A';
+        limitPx: string;
+        sz: string;
+        oid: number;
+        timestamp: number;
+        triggerCondition: string;
+        isTrigger: boolean;
+        triggerPx: string;
+        isPositionTpsl: boolean;
+        reduceOnly: boolean;
+        orderType: string;
+        tif: string;
+        cloid: string;
+      }>
+    >;
+  };
+}
+
+interface L4DiffMessage {
+  Diff: {
+    coin: string;
+    block?: number;
+    diffs: Array<{
+      user: string;
+      oid: number;
+      coin: string;
+      side: 'Bid' | 'Ask';
+      px: string;
+      raw_book_diff: RawBookDiff | 'remove';
+      timestamp?: number;
+    }>;
+  };
+}
+
+interface L4UpdatesMessage {
+  Updates: {
+    time: number;
+    height: number;
+    order_statuses: Array<{
+      time: string;
+      user: string;
+      status: string; // e.g., "open", "badAloPxRejected", "filled", "canceled", etc.
+      order: {
+        user: string | null;
+        coin: string;
+        side: 'B' | 'A';
+        limitPx: string;
+        sz: string;
+        oid: number;
+        timestamp: number;
+        triggerCondition: string;
+        isTrigger: boolean;
+        triggerPx: string;
+        isPositionTpsl: boolean;
+        reduceOnly: boolean;
+        orderType: string;
+        tif: string;
+        cloid: string;
+      };
+    }>;
+  };
+}
+
+interface L4WebSocketMessage {
+  channel: 'subscriptionResponse' | 'l4Book';
+  data:
+    | L4SnapshotMessage
+    | L4DiffMessage
+    | L4UpdatesMessage
+    | {
+        method: string;
+        subscription: {
+          type: string;
+          coin: string;
+        };
+      };
+}
 
 @Injectable()
 export class OrderService implements OnModuleInit, OnModuleDestroy {
@@ -27,11 +131,16 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
   private wsInfoClient: hl.InfoClient;
   private wsExchangeClient: hl.ExchangeClient;
   private subscriptionClient: hl.SubscriptionClient;
+  private localSubscriptionClient: hl.SubscriptionClient;
 
+  // L4 WebSocket client
+  private l4Ws: WebSocket;
+  // L4 state
+  private l4Coin: string = 'SOL';
+  private allOrders: Map<number, Order> = new Map();
   private readonly authority: string;
   private userFillsSubscription: hl.Subscription;
   private userEventsSubscription: hl.Subscription;
-
   // Order tracking
   private pendingOrders = new Map<
     string,
@@ -41,7 +150,6 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
       callback: (result: OrderFillResult) => void;
     }
   >();
-
   // Cancel tracking
   private pendingCancels = new Map<
     string,
@@ -51,7 +159,6 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
       callback: (result: OrderCancelResult) => void;
     }
   >();
-
   // Market data cache
   private marketPrices = new Map<string, MarketPrice>();
 
@@ -78,18 +185,53 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
 
     // Initialize WebSocket transports
     const wsTransport = new hl.WebSocketTransport();
+    const localWsTransport = new hl.WebSocketTransport({
+      // url: 'ws://localhost:8000/ws',
+      url: 'ws://42.2.217.228:8000/ws',
+    });
     this.wsInfoClient = new hl.InfoClient({ transport: wsTransport });
     this.wsExchangeClient = new hl.ExchangeClient({
       wallet: privateKey,
       transport: wsTransport,
     });
-    this.subscriptionClient = new hl.SubscriptionClient({
-      transport: wsTransport,
+
+    this.localSubscriptionClient = new hl.SubscriptionClient({
+      transport: localWsTransport, // Point this to local server
     });
+
+    // Use local transport for subscriptions to the orderbook server
+    this.subscriptionClient = new hl.SubscriptionClient({
+      transport: wsTransport, // Point this to local server
+    });
+
+    this.l4Ws = new WebSocket('ws://localhost:8000/ws');
   }
 
   async onModuleInit() {
     await this.initializeWebSocketSubscriptions();
+
+    // Subscribe to L2 book updates on your local server and print data
+    try {
+      const subscription = await this.localSubscriptionClient.l2Book(
+        { coin: 'SOL' }, // Optional: Add n_levels: 20 if you want to match wscat
+        (data) => {
+          console.log(
+            'Received L2 Book Update:',
+            JSON.stringify(data, null, 2),
+          );
+          // data will look like: { coin: 'SOL', time: 1757651731547, levels: [[{px, sz, n}, ...], [...]] }
+        },
+      );
+      console.log('L2 Book subscription active (ID:', subscription, ')');
+
+      // Optional: Unsubscribe after first update (for one-time snapshot only)
+      // setTimeout(() => this.subscriptionClient.unsubscribe(subscription), 1000);
+    } catch (error) {
+      console.error('Failed to subscribe to L2 Book:', error);
+    }
+
+    // Setup L4 subscription
+    // this.setupL4Subscription();
   }
 
   async onModuleDestroy() {
@@ -116,6 +258,10 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
           data.fills.forEach((fill) => {
             const orderId = fill.oid.toString();
             const pendingOrder = this.pendingOrders.get(orderId);
+            console.log(
+              `fill.time: ${fill.time}, notificationTime: ${notificationTime}`,
+              `notificationTime - fill.time: ${notificationTime - fill.time}`,
+            );
 
             if (pendingOrder) {
               const fillResult: OrderFillResult = {
@@ -221,6 +367,370 @@ export class OrderService implements OnModuleInit, OnModuleDestroy {
     else if (symbol === 'SOL') decimals = 2;
 
     return decimals;
+  }
+
+  private setupL4Subscription(): void {
+    console.log('Setting up L4 subscription');
+
+    // Create WebSocket here to ensure handlers are attached before connection starts
+    this.l4Ws = new WebSocket('ws://localhost:8000/ws');
+
+    // Attach an early error handler for immediate connect failures
+    this.l4Ws.on('error', (error: Error) => {
+      this.logger.error('Early L4 WebSocket connection error:', error);
+    });
+    this.l4Ws.on('open', () => {
+      const subMsg = {
+        method: 'subscribe',
+        subscription: {
+          type: 'l4Book',
+          coin: this.l4Coin,
+        },
+      };
+      console.log('Sending L4 subscription message');
+      this.l4Ws.send(JSON.stringify(subMsg));
+      this.logger.log(`Subscribed to L4 book for ${this.l4Coin}`);
+    });
+    console.log('L4 WebSocket opened');
+
+    this.l4Ws.on('message', (data: WebSocket.RawData) => {
+      try {
+        const rawMessage = Buffer.isBuffer(data)
+          ? data.toString('utf8')
+          : data instanceof ArrayBuffer
+            ? new TextDecoder().decode(data)
+            : String(data);
+        const msg = JSON.parse(rawMessage) as L4WebSocketMessage;
+        this.handleL4Message(msg);
+      } catch (error) {
+        this.logger.error('Failed to parse L4 message:', error);
+        const errorData = Buffer.isBuffer(data)
+          ? data.toString('utf8')
+          : data instanceof ArrayBuffer
+            ? new TextDecoder().decode(data)
+            : String(data);
+        this.logger.error('Raw data:', errorData.slice(0, 500));
+      }
+    });
+
+    this.l4Ws.on('error', (error: Error) => {
+      this.logger.error('L4 WebSocket error:', error);
+    });
+
+    this.l4Ws.on('close', (code: number, reason: Buffer) => {
+      this.logger.warn(`L4 WebSocket closed: ${code} - ${reason.toString()}`);
+    });
+  }
+
+  private handleL4Message(data: unknown): void {
+    try {
+      const msg = data as L4WebSocketMessage;
+
+      // Skip subscription response messages
+      if (msg.channel === 'subscriptionResponse') {
+        this.logger.log('L4 subscription confirmed:', JSON.stringify(msg.data));
+        return;
+      }
+
+      // Handle l4Book messages
+      if (msg.channel === 'l4Book' && msg.data) {
+        if (
+          this.isSnapshotMessage(msg.data) ||
+          this.isDiffMessage(msg.data) ||
+          this.isUpdatesMessage(msg.data)
+        ) {
+          this.processL4BookMessage(msg.data);
+        } else {
+          this.logger.warn(
+            'Unknown l4Book data format:',
+            JSON.stringify(msg.data).slice(0, 500),
+          );
+        }
+        return;
+      }
+
+      // Unknown message format
+      this.logger.warn('Unknown L4 message format:');
+      console.log(JSON.stringify(msg, null, 2).slice(0, 1000));
+    } catch (error) {
+      this.logger.error('Failed to process L4 message:', error);
+      this.logger.error('Raw message:', String(data).slice(0, 1000));
+    }
+  }
+
+  private isSnapshotMessage(data: unknown): data is L4SnapshotMessage {
+    return typeof data === 'object' && data !== null && 'Snapshot' in data;
+  }
+
+  private isDiffMessage(data: unknown): data is L4DiffMessage {
+    return typeof data === 'object' && data !== null && 'Diff' in data;
+  }
+
+  private isUpdatesMessage(data: unknown): data is L4UpdatesMessage {
+    return typeof data === 'object' && data !== null && 'Updates' in data;
+  }
+
+  private processL4BookMessage(
+    data: L4SnapshotMessage | L4DiffMessage | L4UpdatesMessage,
+  ): void {
+    let isSnapshot = false;
+    let isDiff = false;
+    let isUpdates = false;
+
+    // Handle snapshot message
+    if (this.isSnapshotMessage(data)) {
+      isSnapshot = true;
+      const snapshot = data.Snapshot;
+      const coin = snapshot.coin;
+
+      this.logger.log(
+        `Processing L4 snapshot for ${coin} at height ${snapshot.height}`,
+      );
+
+      // Clear existing orders for fresh snapshot
+      this.allOrders.clear();
+
+      // Process all levels in the snapshot
+      let bidCount = 0;
+      let askCount = 0;
+
+      snapshot.levels.forEach((level) => {
+        level.forEach((orderData) => {
+          const order: Order = {
+            coin: orderData.coin,
+            side: orderData.side, // 'B' for bid, 'A' for ask
+            limitPx: orderData.limitPx,
+            sz: orderData.sz,
+            oid: orderData.oid,
+            timestamp: orderData.timestamp,
+          };
+          this.allOrders.set(order.oid, order);
+
+          if (order.side === 'B') bidCount++;
+          else if (order.side === 'A') askCount++;
+        });
+      });
+
+      this.logger.log(
+        `L4 snapshot processed for ${coin}: ${bidCount} bids, ${askCount} asks, height: ${snapshot.height}`,
+      );
+    }
+    // Handle diff message
+    else if (this.isDiffMessage(data)) {
+      isDiff = true;
+      const diff = data.Diff;
+      const coin = diff.coin;
+
+      diff.diffs.forEach((diffItem) => {
+        this.applyL4Diff(diffItem);
+      });
+
+      this.logger.log(
+        `Applied ${diff.diffs.length} L4 diffs for ${coin} (block: ${
+          diff.block || 'unknown'
+        })`,
+      );
+    }
+    // Handle updates message
+    else if (this.isUpdatesMessage(data)) {
+      isUpdates = true;
+      const updates = data.Updates;
+
+      let processedCount = 0;
+      updates.order_statuses.forEach((orderStatus) => {
+        this.applyL4Update(orderStatus);
+        processedCount++;
+      });
+
+      if (processedCount == 0) {
+        return;
+      }
+
+      /*
+      this.logger.log(
+        `Applied ${processedCount} L4 updates at height ${updates.height}`,
+      );
+      */
+
+      // print curreny best bid and ask
+      console.log(
+        `Current best bid: ${this.getSortedBids()[0].limitPx}, Current best ask: ${this.getSortedAsks()[0].limitPx}`,
+      );
+    }
+
+    // After snapshot, diff, or updates, log top 5 levels (aggregated for simplicity)
+    if (isSnapshot || isDiff || isUpdates) {
+      this.logTopLevels();
+    }
+  }
+
+  private applyL4Diff(diffItem: L4DiffMessage['Diff']['diffs'][0]): void {
+    const oid = diffItem.oid;
+
+    if (diffItem.raw_book_diff === 'remove') {
+      // Remove order
+      this.allOrders.delete(oid);
+    } else if (
+      typeof diffItem.raw_book_diff === 'object' &&
+      diffItem.raw_book_diff.new
+    ) {
+      // New order
+      const newData = diffItem.raw_book_diff.new;
+      const order: Order = {
+        coin: diffItem.coin,
+        side: diffItem.side === 'Bid' ? 'B' : 'A',
+        limitPx: diffItem.px,
+        sz: newData.sz,
+        oid: oid,
+        timestamp: diffItem.timestamp || Date.now(),
+      };
+      this.allOrders.set(oid, order);
+    } else if (
+      typeof diffItem.raw_book_diff === 'object' &&
+      diffItem.raw_book_diff.update
+    ) {
+      // Update existing order
+      const existing = this.allOrders.get(oid);
+      if (existing) {
+        const updateData = diffItem.raw_book_diff.update;
+        existing.sz = updateData.newSz;
+        if (diffItem.timestamp) {
+          existing.timestamp = diffItem.timestamp;
+        }
+      }
+    }
+  }
+
+  private applyL4Update(
+    orderStatus: L4UpdatesMessage['Updates']['order_statuses'][0],
+  ): void {
+    const { status, order } = orderStatus;
+    const oid = order.oid;
+
+    switch (status) {
+      case 'open': {
+        // New order placed and open in the book
+        const newOrder: Order = {
+          coin: order.coin,
+          side: order.side, // Already 'B' or 'A'
+          limitPx: order.limitPx,
+          sz: order.sz,
+          oid: order.oid,
+          timestamp: order.timestamp,
+        };
+        this.allOrders.set(oid, newOrder);
+        break;
+      }
+
+      case 'filled':
+      case 'canceled':
+      case 'badAloPxRejected':
+      case 'rejected':
+        // Order is no longer in the book - remove it
+        this.allOrders.delete(oid);
+        break;
+
+      case 'partialFill': {
+        // Partial fill - update the remaining size
+        const existingOrder = this.allOrders.get(oid);
+        if (existingOrder) {
+          existingOrder.sz = order.sz; // sz should be the remaining size after partial fill
+          existingOrder.timestamp = order.timestamp;
+        }
+        break;
+      }
+
+      default:
+        // Handle other status types - some might need different logic
+        // For now, log unknown status types for debugging
+        this.logger.debug(`Unknown order status: ${status} for oid: ${oid}`);
+        this.logger.debug(`Order: ${JSON.stringify(order)}`);
+        break;
+    }
+  }
+
+  private logTopLevels(): void {
+    const bids = this.getSortedBids();
+    const asks = this.getSortedAsks();
+
+    if (bids.length === 0 && asks.length === 0) {
+      return; // No orders to display
+    }
+
+    /*
+    const topBids = this.aggregateTopLevels(bids, 5);
+    const topAsks = this.aggregateTopLevels(asks, 5);
+    */
+
+    /*
+    console.log(
+      `L4 Book Update for ${this.l4Coin} - Top Bids:`,
+      JSON.stringify(topBids.slice(0, 5), null, 2),
+    );
+    console.log(
+      `L4 Book Update for ${this.l4Coin} - Top Asks:`,
+      JSON.stringify(topAsks.slice(0, 5), null, 2),
+    );
+    */
+  }
+
+  // Helper to get sorted bids (desc price, asc timestamp per price)
+  private getSortedBids(): Order[] {
+    return Array.from(this.allOrders.values())
+      .filter((o) => o.side === 'B')
+      .sort((a, b) => {
+        const priceDiff = parseFloat(b.limitPx) - parseFloat(a.limitPx);
+        return priceDiff;
+      });
+  }
+
+  // Helper to get sorted asks (asc price)
+  private getSortedAsks(): Order[] {
+    return Array.from(this.allOrders.values())
+      .filter((o) => o.side === 'A')
+      .sort((a, b) => {
+        const priceDiff = parseFloat(a.limitPx) - parseFloat(b.limitPx);
+        return priceDiff;
+      });
+  }
+
+  // Aggregate top N levels by price (sum sizes per price)
+  private aggregateTopLevels(
+    orders: Order[],
+    n: number,
+  ): Array<{ px: string; totalSz: string }> {
+    if (orders.length === 0) return [];
+
+    const levels = new Map<string, string>();
+    const isBid = orders[0]?.side === 'B';
+
+    // Group orders by price level
+    orders.forEach((order) => {
+      const currentTotal = levels.get(order.limitPx) || '0';
+      const newTotal = (
+        parseFloat(currentTotal) + parseFloat(order.sz)
+      ).toFixed(8);
+      levels.set(order.limitPx, newTotal);
+    });
+
+    // Sort appropriately: bids descending (highest first), asks ascending (lowest first)
+    return Array.from(levels.entries())
+      .sort(([aPx], [bPx]) => {
+        const diff = parseFloat(bPx) - parseFloat(aPx);
+        return isBid ? diff : -diff; // Bids: high to low, Asks: low to high
+      })
+      .slice(0, n)
+      .map(([px, totalSz]) => ({ px, totalSz }));
+  }
+
+  // Public method to access current L4 snapshot (full sorted orders)
+  getL4Snapshot(): { coin: string; bids: Order[]; asks: Order[] } | null {
+    if (this.allOrders.size === 0) return null;
+    return {
+      coin: this.l4Coin,
+      bids: this.getSortedBids(),
+      asks: this.getSortedAsks(),
+    };
   }
 
   /**
